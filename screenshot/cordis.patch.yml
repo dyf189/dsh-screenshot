@@ -1,0 +1,4 @@
+- insert:
+    - id: conversation-screenshot
+      name: dsh-conversation-screenshot
+      config: {}

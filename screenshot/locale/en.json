@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Conversation Screenshot",
+    "description": "Copies a full-length screenshot of the user/model conversation to the clipboard from a button in the composer toolbar."
+  }
+}
