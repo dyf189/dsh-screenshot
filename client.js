@@ -133,19 +133,23 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Walk the staged clone once, collecting boxes, text lines and images.
+     * Walk the staged clone once, collecting boxes, text lines, images and
+     * inline SVG icons. `groupOpacity` accumulates the `opacity` of every
+     * ancestor — hover-hidden rows composite to zero and are skipped.
      */
     function collectScene(root, origin) {
       const boxes = [];
       const texts = [];
       const images = [];
+      const icons = [];
 
-      const collect = (node, clip) => {
+      const collect = (node, clip, groupOpacity) => {
         if (node.nodeType === 3) {
           const value = node.nodeValue;
           if (value === null || value.trim() === '') return;
           const parent = node.parentElement;
           if (parent === null) return;
+          if (parent instanceof SVGElement) return;
           const style = getComputedStyle(parent);
           if (style.visibility !== 'visible') return;
           const lines = collectTextLines(node, origin);
@@ -157,6 +161,7 @@ window.__ModuleLoader__.load({
             color: style.color,
             letterSpacing: style.letterSpacing,
             direction: style.direction,
+            opacity: groupOpacity,
           });
           return;
         }
@@ -165,6 +170,8 @@ window.__ModuleLoader__.load({
         const style = getComputedStyle(element);
         if (style.display === 'none' || style.visibility !== 'visible') return;
         if (style.contentVisibility === 'hidden') return;
+        const ownOpacity = style.opacity === '' ? 1 : Number(style.opacity);
+        const opacity = groupOpacity * (Number.isFinite(ownOpacity) ? Math.max(0, Math.min(1, ownOpacity)) : 1);
         const rect = element.getBoundingClientRect();
         const x = rect.left - origin.left;
         const y = rect.top - origin.top;
@@ -196,7 +203,7 @@ window.__ModuleLoader__.load({
               radius,
               border: hasBorder ? { width: borderWidth, color: style.borderTopColor } : null,
               clip,
-              opacity: Number(style.opacity === '' ? 1 : style.opacity),
+              opacity,
             });
           }
           if (
@@ -209,13 +216,22 @@ window.__ModuleLoader__.load({
           }
         }
         if (element.tagName === 'IMG' && width > 0 && height > 0) {
-          images.push({ element, x, y, width, height, radius: parseFloat(style.borderTopLeftRadius) || 0, clip: nextClip });
+          images.push({ element, x, y, width, height, radius: parseFloat(style.borderTopLeftRadius) || 0, clip: nextClip, opacity });
         }
-        for (const child of node.childNodes) collect(child, nextClip);
+        if (
+          element instanceof SVGSVGElement &&
+          element.ownerSVGElement === null &&
+          width > 0 &&
+          height > 0 &&
+          opacity > 0
+        ) {
+          icons.push({ element, x, y, width, height, color: style.color, clip: nextClip, opacity });
+        }
+        for (const child of node.childNodes) collect(child, nextClip, opacity);
       };
 
-      collect(root, null);
-      return { boxes, texts, images };
+      collect(root, null, 1);
+      return { boxes, texts, images, icons };
     }
 
     function paintBoxes(ctx, boxes, limit) {
@@ -257,12 +273,14 @@ window.__ModuleLoader__.load({
         }
         if (item.direction === 'rtl' && 'direction' in ctx) ctx.direction = 'rtl';
         ctx.fillStyle = item.color === 'rgba(0, 0, 0, 0)' ? 'transparent' : item.color;
+        ctx.globalAlpha = item.opacity > 0 ? Math.min(1, item.opacity) : 1;
         for (const line of item.lines) {
           if (line.top > limit) continue;
           if (line.text.trim() !== '') {
             ctx.fillText(line.text, line.left, line.bottom - Math.max(1, line.height * 0.22));
           }
         }
+        ctx.globalAlpha = 1;
         if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
         if ('direction' in ctx) ctx.direction = 'ltr';
         if (clipped) ctx.restore();
@@ -280,12 +298,76 @@ window.__ModuleLoader__.load({
             roundedPath(ctx, image.x, image.y, image.width, image.height, image.radius);
             ctx.clip();
           }
+          ctx.globalAlpha = image.opacity > 0 ? Math.min(1, image.opacity) : 1;
           ctx.drawImage(image.element, image.x, image.y, image.width, image.height);
+          ctx.globalAlpha = 1;
           if (rounded) ctx.restore();
           if (clipped) ctx.restore();
         } catch {
           /* an undecodable image simply stays blank */
         }
+      }
+    }
+
+    const ICON_MAX_EDGE = 256;
+
+    /**
+     * Inline SVG icons become standalone images: serialized with the resolved
+     * text colour baked in (an isolated SVG cannot see page CSS, so
+     * `currentColor` would fall back to black), then decoded from a data URL.
+     * Identical shapes share one decode. Shapes that reference outside
+     * themselves — sprite `<use>` targets, `foreignObject`, anything
+     * oversized — stay unpainted rather than hang or taint the capture.
+     */
+    async function rasterizeIcons(icons) {
+      const cache = new Map();
+      const jobs = icons.map((icon) => {
+        if (icon.width > ICON_MAX_EDGE || icon.height > ICON_MAX_EDGE) return null;
+        let source;
+        try {
+          const clone = icon.element.cloneNode(true);
+          clone.removeAttribute('class');
+          if (clone.querySelector('use, foreignObject') !== null) return null;
+          clone.setAttribute('width', String(Math.max(1, Math.round(icon.width))));
+          clone.setAttribute('height', String(Math.max(1, Math.round(icon.height))));
+          clone.style.setProperty('color', icon.color);
+          source = new XMLSerializer().serializeToString(clone);
+        } catch {
+          return null;
+        }
+        if (source.length > 100_000) return null;
+        let bitmap = cache.get(source);
+        if (bitmap === undefined) {
+          bitmap = new Promise((resolve) => {
+            const image = new Image();
+            const timer = setTimeout(() => resolve(null), 5000);
+            image.onload = () => {
+              clearTimeout(timer);
+              resolve(image);
+            };
+            image.onerror = () => {
+              clearTimeout(timer);
+              resolve(null);
+            };
+            image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(source);
+          });
+          cache.set(source, bitmap);
+        }
+        return bitmap;
+      });
+      return Promise.all(jobs);
+    }
+
+    function paintIcons(ctx, icons, bitmaps, limit) {
+      for (let index = 0; index < icons.length; index += 1) {
+        const icon = icons[index];
+        const bitmap = bitmaps[index];
+        if (bitmap === null || bitmap === undefined || icon.y > limit) continue;
+        const clipped = pushClip(ctx, icon.clip);
+        ctx.globalAlpha = icon.opacity > 0 ? Math.min(1, icon.opacity) : 1;
+        ctx.drawImage(bitmap, icon.x, icon.y, icon.width, icon.height);
+        ctx.globalAlpha = 1;
+        if (clipped) ctx.restore();
       }
     }
 
@@ -306,6 +388,7 @@ window.__ModuleLoader__.load({
 
       const origin = stage.getBoundingClientRect();
       const scene = collectScene(clone, origin);
+      const iconBitmaps = await rasterizeIcons(scene.icons);
       ctx.save();
       ctx.scale(scale, scale);
       // Start from the resolved page background so translucent layers composite
@@ -315,11 +398,18 @@ window.__ModuleLoader__.load({
       paintBoxes(ctx, scene.boxes, height);
       paintTexts(ctx, scene.texts, height);
       paintImages(ctx, scene.images, height);
+      paintIcons(ctx, scene.icons, iconBitmaps, height);
       ctx.restore();
 
       const blob = await new Promise((resolve) => canvas.toBlob((value) => resolve(value), 'image/png'));
       if (blob === null) throw new Error('PNG encoding failed');
-      return { blob, width: canvas.width, height: canvas.height, scale, elements: scene.boxes.length + scene.texts.length };
+      return {
+        blob,
+        width: canvas.width,
+        height: canvas.height,
+        scale,
+        elements: scene.boxes.length + scene.texts.length + scene.images.length + scene.icons.length,
+      };
     }
 
     /* ------------------------------------------------------------------ *

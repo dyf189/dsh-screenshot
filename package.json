@@ -1,6 +1,6 @@
 {
   "name": "dsh-conversation-screenshot",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Copy a full-length screenshot of the DSH conversation to the clipboard.",
