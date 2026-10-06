@@ -40,6 +40,8 @@ dsh plugin --profile web remove dsh-conversation-screenshot
 3. 截单轮：鼠标悬停到目标回复，点该轮操作行里的相机按钮，等待「已复制本轮截图」提示；
 4. 到任意支持粘贴图片的地方（聊天窗口、文档、画图工具）Ctrl+V 粘贴。
 
+复制成功时按钮图标会短暂变为对钩（与 dsh 复制成功的反馈一致）；剪贴板不可用时回退为下载 PNG，按钮不变。
+
 ## 已知限制
 
 - dsh 自身拉取历史偶发崩溃（控制台可见 `session-controller event feed subscriber failed`），插件会持续重试并在确实无法继续时诚实降级为部分截图。
@@ -77,7 +79,7 @@ dsh plugin --profile web remove dsh-conversation-screenshot
 | 模型 | 阶段 | 主要工作 |
 | --- | --- | --- |
 | **DeepSeek-V4.1-Flash**（dsh 内置 agent） | v1.0.0 初版 | 从零搭出插件：slots 注入、clone + 布局读取 + Canvas 绘制方案、剪贴板复制与下载回退、在真实浏览器里用 CDP 调试并迭代多轮渲染方案 |
-| **GLM-5.3-Flash**（ZCode 代理） | v1.0.1–v1.1.0 | 端到端验证并修复两个渲染缺陷（克隆丢失祖先 CSS 自定义属性导致列宽错误、`measureText` 拟合断行漂移导致丢字）、实现单轮截图、历史加载改为人工式持续重试并诚实降级、补上界面图标的 SVG 渲染、打包与仓库 |
+| **GLM-5.3-Flash**（ZCode 代理） | v1.0.1–v1.1.1 | 端到端验证并修复两个渲染缺陷（克隆丢失祖先 CSS 自定义属性导致列宽错误、`measureText` 拟合断行漂移导致丢字）、实现单轮截图、历史加载改为人工式持续重试并诚实降级、补上界面图标的 SVG 渲染、打包与仓库 |
 
 ### 人工参与
 

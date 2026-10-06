@@ -729,10 +729,12 @@ window.__ModuleLoader__.load({
       // The stage is painted behind the application so layout stays cheap (a far
       // off-screen box costs seconds), and it holds a clone, so the live
       // transcript and the composer the user may be typing in are untouched.
+      // opacity:0 keeps it from ever flashing into view, whatever stacking
+      // context the app builds around it — layout and rects are unaffected.
       const stage = document.createElement('div');
       stage.setAttribute('data-dsh-screenshot-stage', 'true');
       stage.style.cssText =
-        'position:absolute;left:0;top:0;pointer-events:none;z-index:0;' +
+        'position:absolute;left:0;top:0;pointer-events:none;z-index:0;opacity:0;' +
         `width:${width}px;height:${height}px;overflow:hidden;background:${background};` +
         `font-family:${contentStyles.fontFamily};color:${contentStyles.color};`;
 
@@ -901,14 +903,17 @@ window.__ModuleLoader__.load({
       const t = useTranslate();
       const [busy, setBusy] = React.useState(false);
       const [status, setStatus] = React.useState(null);
+      const [done, setDone] = React.useState(false);
       const anchorRef = React.useRef(null);
       const timerRef = React.useRef(null);
+      const doneTimerRef = React.useRef(null);
       const aliveRef = React.useRef(true);
 
       React.useEffect(
         () => () => {
           aliveRef.current = false;
           if (timerRef.current !== null) clearTimeout(timerRef.current);
+          if (doneTimerRef.current !== null) clearTimeout(doneTimerRef.current);
         },
         [],
       );
@@ -918,6 +923,17 @@ window.__ModuleLoader__.load({
         setStatus(next);
         if (timerRef.current !== null) clearTimeout(timerRef.current);
         if (hold !== true) timerRef.current = setTimeout(() => setStatus(null), 4200);
+      }, []);
+
+      /** Flash a success check over the entry icon, the way dsh marks a copy. */
+      const markDone = React.useCallback(() => {
+        if (!aliveRef.current) return;
+        setDone(true);
+        if (doneTimerRef.current !== null) clearTimeout(doneTimerRef.current);
+        doneTimerRef.current = setTimeout(() => {
+          doneTimerRef.current = null;
+          if (aliveRef.current) setDone(false);
+        }, 1200);
       }, []);
 
       const run = React.useCallback(
@@ -944,10 +960,10 @@ window.__ModuleLoader__.load({
         [announce, t],
       );
 
-      return { t, busy, status, anchorRef, announce, run };
+      return { t, busy, status, done, markDone, anchorRef, announce, run };
     }
 
-    /** Copy the picture to the clipboard, falling back to a download. */
+    /** Copy the picture to the clipboard, falling back to a download. @returns whether the clipboard write succeeded. */
     async function deliver(shot, { announce, t, sessionId, copiedKey = 'copied', partial = false }) {
       const copied = await copyPng(shot.blob);
       if (copied) {
@@ -963,6 +979,7 @@ window.__ModuleLoader__.load({
       if (shot.scale < 0.999) {
         setTimeout(() => announce(t('scaled', { scale: shot.scale.toFixed(2) })), 4300);
       }
+      return copied;
     }
 
     /* ------------------------------------------------------------------ *
@@ -991,8 +1008,27 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function CheckIcon() {
+      return React.createElement(
+        'svg',
+        {
+          viewBox: '0 0 24 24',
+          width: 15,
+          height: 15,
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 2,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': true,
+          focusable: false,
+        },
+        React.createElement('path', { d: 'M4.5 12.8l4.9 4.8L19.5 6.6' }),
+      );
+    }
+
     function ScreenshotButton({ sessionId }) {
-      const { t, busy, status, anchorRef, announce, run } = useCaptureStatus();
+      const { t, busy, status, done, markDone, anchorRef, announce, run } = useCaptureStatus();
 
       const produce = React.useCallback(
         async (anchor, announce) => {
@@ -1008,9 +1044,10 @@ window.__ModuleLoader__.load({
 
           announce(t('rendering'), true);
           const shot = await captureConversation(anchor);
-          await deliver(shot, { announce, t, sessionId, partial: !historyComplete });
+          const copied = await deliver(shot, { announce, t, sessionId, partial: !historyComplete });
+          if (copied) markDone();
         },
-        [announce, sessionId, t],
+        [announce, markDone, sessionId, t],
       );
 
       return React.createElement(
@@ -1031,7 +1068,11 @@ window.__ModuleLoader__.load({
               run(produce);
             },
           },
-          busy ? React.createElement('span', { className: 'cs-spinner' }) : React.createElement(CameraIcon),
+          busy
+            ? React.createElement('span', { className: 'cs-spinner' })
+            : done
+              ? React.createElement(CheckIcon)
+              : React.createElement(CameraIcon),
         ),
         status !== null &&
           React.createElement(
@@ -1048,7 +1089,7 @@ window.__ModuleLoader__.load({
      * model produced before the next user message.
      */
     function TurnScreenshotButton({ sessionId }) {
-      const { t, busy, status, anchorRef, announce, run } = useCaptureStatus();
+      const { t, busy, status, done, markDone, anchorRef, announce, run } = useCaptureStatus();
 
       const produce = React.useCallback(
         async (anchor, announce) => {
@@ -1061,12 +1102,13 @@ window.__ModuleLoader__.load({
           try {
             announce(t('rendering'), true);
             const shot = await captureTurn(turnEl);
-            await deliver(shot, { announce, t, sessionId, copiedKey: 'turnCopied' });
+            const copied = await deliver(shot, { announce, t, sessionId, copiedKey: 'turnCopied' });
+            if (copied) markDone();
           } finally {
             if (reveal === 'hover') turnEl.setAttribute('data-actions-reveal', reveal);
           }
         },
-        [announce, sessionId, t],
+        [announce, markDone, sessionId, t],
       );
 
       return React.createElement(
@@ -1087,7 +1129,11 @@ window.__ModuleLoader__.load({
               run(produce);
             },
           },
-          busy ? React.createElement('span', { className: 'cs-spinner' }) : React.createElement(CameraIcon),
+          busy
+            ? React.createElement('span', { className: 'cs-spinner' })
+            : done
+              ? React.createElement(CheckIcon)
+              : React.createElement(CameraIcon),
         ),
         status !== null &&
           React.createElement(
