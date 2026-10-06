@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Copy a full-length screenshot of the DSH conversation to the clipboard.",
+  "license": "CC0-1.0",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
